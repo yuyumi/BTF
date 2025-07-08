@@ -1,0 +1,7 @@
+torch>=2.0.0
+torch-audio>=2.0.0
+torch-vision>=0.15.0
+numpy>=1.21.0
+matplotlib>=3.5.0
+scipy>=1.7.0
+tqdm>=4.64.0 
