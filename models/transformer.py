@@ -24,7 +24,11 @@ class PositionalEncoding(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Add positional encoding to input."""
-        return x + self.pe[:x.size(0), :]
+        # x shape: (batch_size, seq_len, d_model)
+        seq_len = x.size(1)
+        # self.pe shape: (max_len, 1, d_model)
+        # Extract (seq_len, d_model) and add batch dimension
+        return x + self.pe[:seq_len, 0, :].unsqueeze(0)
 
 
 class MultiHeadAttention(nn.Module):
