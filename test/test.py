@@ -276,7 +276,7 @@ def run_performance_test():
     
     plt.tight_layout()
     plt.savefig('performance_test_results.png', dpi=300, bbox_inches='tight')
-    plt.show()
+    plt.close()  # Close the figure to free memory
     
     print("\nPerformance test completed!")
     print("Results saved to 'performance_test_results.png'")

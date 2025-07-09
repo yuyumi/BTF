@@ -267,6 +267,7 @@ plots/*.png
 figures/*.png
 results/*.png
 analysis_results/*.png
+theoretical_analysis/*
 
 # Configuration overrides
 config_local.py

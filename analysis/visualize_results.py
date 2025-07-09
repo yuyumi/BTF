@@ -110,7 +110,7 @@ class WaveletAnalyzer:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()  # Close the figure to free memory
     
     def analyze_predictions(self, num_samples: int = 100, save_path: str = None):
         """Analyze model predictions vs true coefficients."""
@@ -265,7 +265,7 @@ class WaveletAnalyzer:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()  # Close the figure to free memory
         
         # Print summary statistics
         print("\n" + "="*60)
@@ -329,7 +329,7 @@ class WaveletAnalyzer:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()  # Close the figure to free memory
     
     def compare_configurations(self, other_analyzers: List['WaveletAnalyzer'], 
                              labels: List[str], save_path: str = None):
@@ -382,7 +382,7 @@ class WaveletAnalyzer:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()  # Close the figure to free memory
     
     def generate_report(self, output_dir: str = "analysis_results"):
         """Generate a comprehensive analysis report."""
@@ -413,7 +413,7 @@ class WaveletAnalyzer:
             pickle.dump(detailed_results, f)
         
         # 5. Generate summary report
-        with open(f"{output_dir}/summary_report.txt", 'w') as f:
+        with open(f"{output_dir}/summary_report.txt", 'w', encoding='utf-8') as f:
             f.write("WAVELET TRANSFORMER ANALYSIS REPORT\n")
             f.write("="*50 + "\n\n")
             
