@@ -170,13 +170,35 @@ def main():
                 # Test theorem over Hölder balls for each beta in the grid
                 save_path = f"{args.output_dir}/theorem_L{L_idx+1}_interval_{i+1}_analysis.png"
                 
-                interval_results = analyzer.test_theorem_3_1_over_holder_balls(
+                # First find or use universal constants
+                universal_constants_result = analyzer.test_theorem_3_1_over_holder_balls(
                     sample_sizes=args.sample_sizes,
                     beta_values=beta_grid,
                     L=L,
                     num_trials=args.num_trials,
                     save_path=save_path
                 )
+                
+                # If we found universal constants, do detailed empirical vs theoretical analysis
+                if universal_constants_result['theorem_satisfied']:
+                    M = universal_constants_result['universal_constants']['M']
+                    B = universal_constants_result['universal_constants']['B']
+                    
+                    print(f"\n--- Detailed Empirical vs Theoretical Analysis ---")
+                    print(f"Using universal constants: M = {M:.3f}, B = {B:.3f}")
+                    
+                    detailed_analysis = analyzer.analyze_empirical_vs_theoretical_rates(
+                        M=M, B=B, L=L,
+                        sample_sizes=args.sample_sizes,
+                        beta_values=beta_grid,
+                        num_trials=args.num_trials,
+                        save_path=f"{args.output_dir}/detailed_L{L_idx+1}_interval_{i+1}_analysis.png"
+                    )
+                    
+                    # Merge detailed analysis into results
+                    universal_constants_result['detailed_analysis'] = detailed_analysis
+                
+                interval_results = universal_constants_result
                 
                 L_results[interval_name] = interval_results
                 

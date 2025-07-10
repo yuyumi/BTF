@@ -157,12 +157,12 @@ def print_results_summary(results):
         print(f"    B = {B:.3f}")
         print(f"    Search success rate: {universal_constants['search_details']['success_rate']:.1%}")
         
-        validation = results['validation_results']
-        print(f"\n✓ VALIDATION RESULTS:")
-        print(f"    Overall success rate: {validation['overall_success_rate']:.1%}")
-        print(f"    All combinations pass: {validation['all_combinations_pass']}")
+        performance = results['performance_results']
+        print(f"\n✓ PERFORMANCE RESULTS:")
+        print(f"    Overall success rate: {performance['overall_success_rate']:.1%}")
+        print(f"    All combinations pass: {performance['all_combinations_pass']}")
         
-        if validation['all_combinations_pass']:
+        if performance['all_combinations_pass']:
             print(f"\n🎉 THEOREM 3.1 IS SATISFIED!")
             print(f"   Universal constants M, B exist that work for all β ∈ [{min(results['beta_values']):.2f}, {max(results['beta_values']):.2f}].")
         else:
@@ -171,7 +171,7 @@ def print_results_summary(results):
             
             # Show which combinations failed
             failed_combinations = []
-            for (beta, n), result in validation['combination_results'].items():
+            for (beta, n), result in performance['combination_results'].items():
                 if not result['passes']:
                     failed_combinations.append((beta, n))
             

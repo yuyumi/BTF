@@ -91,7 +91,7 @@ def search_valid_configuration(L: float, beta1: float, beta2: float, n: int,
     
     # Search grids - start with reasonable ranges
     M_candidates = np.linspace(0.1, 20.0, 50)
-    B_candidates = np.linspace(1.0, 8.0, 20)
+    B_candidates = np.linspace(0.5, 3.0, 25)  # Start from 0.5 for reasonable concentration
     
     for M in M_candidates:
         for B in B_candidates:

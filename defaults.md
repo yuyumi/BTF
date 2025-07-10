@@ -7,7 +7,7 @@
 | `input_dim` | 1 | Input feature dimension |
 | `d_model` | 256 | Model embedding dimension |
 | `n_heads` | 1 | Number of attention heads |
-| `n_layers` | 6 | Number of transformer layers |
+| `n_layers` | 3 | Number of transformer layers |
 | `d_ff` | 1024 | Feed-forward network dimension |
 | `max_seq_len` | 1000 | Maximum sequence length |
 | `dropout` | 0.1 | Dropout probability |
