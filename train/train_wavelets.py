@@ -7,10 +7,17 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import os
 import sys
+import json
 from typing import Dict, List, Tuple
 
 # Add parent directory to path to import our modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Load config
+def load_config():
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.json')
+    with open(config_path, 'r') as f:
+        return json.load(f)
 
 from data.wavelet_data_generator import create_wavelet_prior, WaveletSpikeSlabPrior
 from models.transformer import create_model, BayesianTransformer
@@ -361,6 +368,12 @@ class WaveletTrainer:
 def main():
     """Main training script - test if naive transformer can learn Bayesian structure."""
     
+    # Load configuration
+    config = load_config()
+    data_config = config.get('data_generation', {})
+    model_config = config.get('model', {})
+    training_config = config.get('training', {})
+    
     # Set device with detailed feedback
     if torch.cuda.is_available():
         device = torch.device('cuda')
@@ -376,9 +389,9 @@ def main():
     # Create wavelet prior
     print("Creating wavelet spike-slab prior...")
     wavelet_prior = create_wavelet_prior(
-        'standard',  # Start with standard configuration
-        n=128,       # Sample size
-        max_resolution=4  # Moderate resolution
+        data_config.get('configuration', 'standard'),
+        n=data_config.get('n', 128),
+        max_resolution=data_config.get('max_resolution', 4)
     )
     
     # Print configuration
@@ -396,14 +409,14 @@ def main():
     # Create standard transformer model
     seq_len = wavelet_prior.total_coeffs
     model = create_model(
-        input_dim=1,
-        d_model=128,      # Standard size
-        n_heads=1,        # Single attention head
-        n_layers=6,       # Standard depth
-        d_ff=512,         # Standard feed-forward
+        input_dim=model_config.get('input_dim', 1),
+        d_model=model_config.get('d_model', 128),
+        n_heads=model_config.get('n_heads', 1),
+        n_layers=model_config.get('n_layers', 6),
+        d_ff=model_config.get('d_ff', 512),
         max_seq_len=seq_len,
-        dropout=0.1,
-        output_dim=1
+        dropout=model_config.get('dropout', 0.1),
+        output_dim=model_config.get('output_dim', 1)
     )
     
     print(f"\nStandard transformer created:")
@@ -415,17 +428,17 @@ def main():
         model=model,
         wavelet_prior=wavelet_prior,
         device=device,
-        learning_rate=1e-4,
-        weight_decay=1e-5
+        learning_rate=training_config.get('learning_rate', 1e-4),
+        weight_decay=training_config.get('weight_decay', 1e-5)
     )
     
     # Train the model
     print(f"\nStarting training...")
     results = trainer.train(
-        num_epochs=50,
-        train_samples=3000,
-        val_samples=500,
-        batch_size=32,
+        num_epochs=training_config.get('num_epochs', 50),
+        train_samples=training_config.get('train_samples', 3000),
+        val_samples=training_config.get('val_samples', 500),
+        batch_size=training_config.get('batch_size', 32),
         save_path='checkpoints/naive_wavelet_transformer.pth'
     )
     

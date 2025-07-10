@@ -8,6 +8,7 @@ import sys
 from scipy import stats
 from torch.utils.data import DataLoader
 import pickle
+import csv
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,7 +44,7 @@ class HolderBallGenerator:
             if j == 0:
                 self.coeff_indices.append((0, 0))
             else:
-                for k in range(2 ** (j - 1)):
+                for k in range(2 ** j):
                     self.coeff_indices.append((j, k))
     
     def generate_holder_parameters(self, seq_len: int, mode: str = 'boundary') -> torch.Tensor:
@@ -52,34 +53,119 @@ class HolderBallGenerator:
         
         Args:
             seq_len: Length of coefficient sequence
-            mode: 'boundary' (on boundary), 'interior' (inside ball), 'random' (random in ball)
+            mode: 'boundary' (on boundary), 'interior' (inside ball), 'uniform' (uniform in ball)
             
         Returns:
             Coefficient tensor of shape (seq_len, 1)
         """
         coefficients = torch.zeros(seq_len, 1)
         
+        # Get constraint bounds for each coefficient
+        constraint_bounds = []
         for i in range(min(seq_len, len(self.coeff_indices))):
             j, k = self.coeff_indices[i]
-            
-            # Hölder constraint: |θ_{j,k}| ≤ L * 2^{-j(β + 1/2)}
             max_magnitude = self.L * (2 ** (-j * (self.beta + 0.5)))
+            constraint_bounds.append(max_magnitude)
+        
+        if mode == 'boundary':
+            # Proper boundary sampling: at least one coefficient at its constraint
+            self._sample_boundary(coefficients, constraint_bounds)
+        elif mode == 'interior':
+            # Sample uniformly within constraints (excluding boundary)
+            self._sample_interior(coefficients, constraint_bounds)
+        elif mode == 'uniform':
+            # Sample uniformly within constraints (including boundary)
+            self._sample_uniform(coefficients, constraint_bounds)
+        else:
+            raise ValueError(f"Unknown mode: {mode}. Use 'boundary', 'interior', or 'uniform'")
+                
+        return coefficients
+    
+    def _sample_boundary(self, coefficients: torch.Tensor, constraint_bounds: List[float]):
+        """
+        Sample from the boundary of the Holder ball.
+        
+        Strategy: Randomly choose one coefficient to be at its constraint boundary,
+        sample all others uniformly within their constraints.
+        """
+        num_coeffs = len(constraint_bounds)
+        
+        # Choose which coefficient(s) will be at boundary
+        boundary_idx = np.random.choice(num_coeffs)
+        
+        for i in range(num_coeffs):
+            max_magnitude = constraint_bounds[i]
             
-            if mode == 'boundary':
-                # Sample on boundary of constraint
+            if i == boundary_idx:
+                # This coefficient is at boundary: |θ_{j,k}| = max_magnitude
                 sign = np.random.choice([-1, 1])
                 coefficients[i, 0] = sign * max_magnitude
-            elif mode == 'interior':
-                # Sample uniformly in constraint region
-                coefficients[i, 0] = np.random.uniform(-max_magnitude, max_magnitude)
-            elif mode == 'random':
-                # Sample with probability proportional to constraint size
-                if np.random.random() < 0.5:  # 50% chance of being zero
-                    coefficients[i, 0] = 0.0
-                else:
-                    coefficients[i, 0] = np.random.uniform(-max_magnitude, max_magnitude)
             else:
-                raise ValueError(f"Unknown mode: {mode}")
+                # Sample uniformly within constraint
+                coefficients[i, 0] = np.random.uniform(-max_magnitude, max_magnitude)
+    
+    def _sample_interior(self, coefficients: torch.Tensor, constraint_bounds: List[float]):
+        """
+        Sample from the interior of the Holder ball (excluding boundary).
+        
+        Strategy: Sample uniformly within constraints, then shrink slightly to ensure
+        we're in the interior.
+        """
+        num_coeffs = len(constraint_bounds)
+        shrink_factor = 0.99  # Shrink slightly to ensure interior
+        
+        for i in range(num_coeffs):
+            max_magnitude = constraint_bounds[i] * shrink_factor
+            coefficients[i, 0] = np.random.uniform(-max_magnitude, max_magnitude)
+    
+    def _sample_uniform(self, coefficients: torch.Tensor, constraint_bounds: List[float]):
+        """
+        Sample uniformly from the entire Holder ball (including boundary).
+        
+        Strategy: Sample each coefficient independently and uniformly within its constraint.
+        """
+        num_coeffs = len(constraint_bounds)
+        
+        for i in range(num_coeffs):
+            max_magnitude = constraint_bounds[i]
+            coefficients[i, 0] = np.random.uniform(-max_magnitude, max_magnitude)
+    
+    def sample_multiple_boundary_points(self, seq_len: int, num_boundary_coeffs: int = 1) -> torch.Tensor:
+        """
+        Sample from boundary with multiple coefficients at their constraints.
+        
+        Args:
+            seq_len: Length of coefficient sequence
+            num_boundary_coeffs: Number of coefficients to place at boundary
+            
+        Returns:
+            Coefficient tensor with specified number of coefficients at boundary
+        """
+        coefficients = torch.zeros(seq_len, 1)
+        
+        # Get constraint bounds
+        constraint_bounds = []
+        for i in range(min(seq_len, len(self.coeff_indices))):
+            j, k = self.coeff_indices[i]
+            max_magnitude = self.L * (2 ** (-j * (self.beta + 0.5)))
+            constraint_bounds.append(max_magnitude)
+        
+        num_coeffs = len(constraint_bounds)
+        num_boundary_coeffs = min(num_boundary_coeffs, num_coeffs)
+        
+        # Choose which coefficients will be at boundary
+        boundary_indices = np.random.choice(num_coeffs, num_boundary_coeffs, replace=False)
+        
+        for i in range(num_coeffs):
+            max_magnitude = constraint_bounds[i]
+            
+            if i in boundary_indices:
+                # This coefficient is at boundary
+                sign = np.random.choice([-1, 1])
+                coefficients[i, 0] = sign * max_magnitude
+            else:
+                # Sample uniformly within constraint
+                coefficients[i, 0] = np.random.uniform(-max_magnitude, max_magnitude)
                 
         return coefficients
 
@@ -111,7 +197,7 @@ class WeightedLInfLoss:
                 idx += 1
             else:
                 start_idx = idx
-                for k in range(2 ** (j - 1)):
+                for k in range(2 ** j):
                     self.coeff_indices.append((j, k))
                     idx += 1
                 self.level_ranges[j] = (start_idx, idx)
@@ -182,6 +268,110 @@ class TheoreticalAnalyzer:
         print(f"Max resolution: {self.max_resolution}")
         print(f"Sequence length: {self.seq_len}")
     
+    def load_theorem_configurations(self, config_path: str = "theorem_configurations.csv") -> Optional[List[Dict]]:
+        """
+        Load pre-generated theorem configurations from CSV file.
+        
+        Args:
+            config_path: Path to CSV file with configurations
+            
+        Returns:
+            List of configuration dictionaries, or None if file doesn't exist
+        """
+        if not os.path.exists(config_path):
+            print(f"No pre-generated configurations found at {config_path}")
+            return None
+            
+        print(f"Loading pre-generated configurations from {config_path}")
+        
+        configurations = []
+        try:
+            with open(config_path, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    config = {
+                        'M': float(row['M']),
+                        'B': float(row['B']),
+                        'L': float(row['L']),
+                        'Beta1': float(row['Beta1']),
+                        'Beta2': float(row['Beta2']),
+                        'n': int(row['n']),
+                        'seq_len': int(row['seq_len'])
+                    }
+                    configurations.append(config)
+                    
+            print(f"✓ Loaded {len(configurations)} pre-generated configurations")
+            return configurations
+            
+        except Exception as e:
+            print(f"Error loading configurations: {e}")
+            return None
+    
+    def find_matching_configuration(self, configurations: List[Dict], 
+                                  L: float, beta1: float, beta2: float, n: int) -> Optional[Dict]:
+        """
+        Find a configuration that matches the given parameters.
+        
+        Args:
+            configurations: List of available configurations
+            L: Desired L value
+            beta1: Desired Beta1 value
+            beta2: Desired Beta2 value
+            n: Desired n value
+            
+        Returns:
+            Matching configuration or None
+        """
+        for config in configurations:
+            if (abs(config['L'] - L) < 1e-6 and 
+                abs(config['Beta1'] - beta1) < 1e-6 and 
+                abs(config['Beta2'] - beta2) < 1e-6 and 
+                config['n'] == n):
+                return config
+        return None
+    
+    def test_with_precomputed_configuration(self, config: Dict, num_trials: int = 100) -> Dict:
+        """
+        Test Theorem 3.1 using a pre-computed configuration.
+        
+        Args:
+            config: Pre-computed configuration with M, B, L, Beta1, Beta2, n
+            num_trials: Number of trials for validation
+            
+        Returns:
+            Test results
+        """
+        M, B, L = config['M'], config['B'], config['L']
+        beta1, beta2, n = config['Beta1'], config['Beta2'], config['n']
+        
+        print(f"\nTesting pre-computed configuration:")
+        print(f"  M = {M:.3f}, B = {B:.3f}, L = {L:.2f}")
+        print(f"  β ∈ [{beta1:.1f}, {beta2:.1f}], n = {n}")
+        
+        # Create β grid within the interval
+        beta_values = np.linspace(beta1, beta2, 5)
+        
+        # Validate the configuration
+        validation_results = self._validate_universal_constants(
+            M, B, beta_values, [n], L, num_trials
+        )
+        
+        # Create results in the expected format
+        results = {
+            'sample_sizes': [n],
+            'beta_values': beta_values.tolist(),
+            'L': L,
+            'universal_constants': {
+                'M': M,
+                'B': B,
+                'search_details': {'precomputed': True}
+            },
+            'validation_results': validation_results,
+            'theorem_satisfied': validation_results['all_combinations_pass'],
+            'overall_success_rate': validation_results['overall_success_rate']
+        }
+        
+        return results
 
     
     def test_uniform_convergence(self,
@@ -310,12 +500,12 @@ class TheoreticalAnalyzer:
                                 num_trials: int = 100,
                                 save_path: str = None) -> Dict:
         """
-        Test Theorem 3.1 over Hölder balls: Find constants M, B such that concentration holds.
+        Test Theorem 3.1 over Hölder balls: Find universal constants M, B that work for ALL β values.
         
-        Tests over Hölder balls H(β, L) using weighted L∞ loss function as specified in the theorem.
-        
-        Theorem: ∃ M, B > 0 such that for all θ₀ ∈ H(β, L):
+        The theorem states that there exist M, B > 0 such that for ALL β ∈ [β₁, β₂]:
         P^n(θ : ℓ∞(θ, θ₀) ≥ M(n/log n)^{-β/(2β+1)}|Y^n) ≤ n^{-B}
+        
+        This means M and B are UNIVERSAL constants, not β-dependent.
         
         Args:
             sample_sizes: Sample sizes to test
@@ -327,29 +517,38 @@ class TheoreticalAnalyzer:
         Returns:
             Dictionary with analysis results
         """
-        print("\nTheorem 3.1 Analysis: Finding Constants M, B")
-        print("="*60)
-        print("Testing over Hölder balls H(β,L) with weighted L∞ loss")
+        print("\nTheorem 3.1 Analysis: Finding Universal Constants M, B")
+        print("="*65)
+        print("Finding SINGLE pair (M,B) that works for ALL β values simultaneously")
         
-        results = {
-            'sample_sizes': sample_sizes,
-            'beta_values': beta_values,
-            'L': L,
-            'holder_ball_results': {},
-            'optimal_constants': {},
-            'theorem_satisfied': {}
-        }
+        # Try to load pre-generated configurations first
+        beta1, beta2 = min(beta_values), max(beta_values)
+        configurations = self.load_theorem_configurations()
+        
+        if configurations:
+            print(f"\nChecking for pre-computed configurations for β ∈ [{beta1:.1f}, {beta2:.1f}], L = {L:.2f}")
+            
+            # Try to find matching configurations for each sample size
+            for n in sample_sizes:
+                matching_config = self.find_matching_configuration(configurations, L, beta1, beta2, n)
+                if matching_config:
+                    print(f"✓ Found pre-computed configuration for n = {n}")
+                    return self.test_with_precomputed_configuration(matching_config, num_trials)
+            
+            print("No exact matches found, falling back to exhaustive search")
+        
+        print("\nPerforming exhaustive search for universal constants")
+        
+        # Collect all empirical data across all (β, n) combinations
+        all_empirical_data = []
+        all_theoretical_rates = []
+        beta_n_combinations = []
+        
+        print(f"\nPhase 1: Collecting empirical data across all (β, n) combinations")
+        print("-" * 60)
         
         for beta in beta_values:
-            print(f"\n--- Testing β = {beta} ---")
-            
-            beta_results = {
-                'empirical_rates': [],
-                'theoretical_rates': [],
-                'optimal_M': [],
-                'concentration_probabilities': [],
-                'theorem_holds': []
-            }
+            print(f"\nTesting β = {beta}")
             
             # Initialize Hölder ball generator for this β
             holder_generator = HolderBallGenerator(self.max_resolution, beta, L)
@@ -357,16 +556,16 @@ class TheoreticalAnalyzer:
             for n in sample_sizes:
                 print(f"  Sample size n = {n}")
                 
-                # Theoretical rate (n/log n)^{-β/(2β+1)}
+                # Theoretical rate for this (β, n) combination
                 theoretical_rate = (n / np.log(n)) ** (-beta / (2 * beta + 1))
                 
                 empirical_losses = []
                 
-                # Test over multiple θ₀ from Hölder ball
+                # Collect empirical losses for this (β, n) combination
                 for trial in range(num_trials):
                     # Generate θ₀ from Hölder ball H(β, L)
                     true_params_holder = holder_generator.generate_holder_parameters(
-                        self.seq_len, mode='boundary'  # Test boundary cases
+                        self.seq_len, mode='boundary'
                     )
                     
                     # Add noise: Y = θ₀ + n^{-1/2} * ε
@@ -383,149 +582,368 @@ class TheoreticalAnalyzer:
                     weighted_loss = self.weighted_loss.compute_loss(pred_params[0], true_params_holder)
                     empirical_losses.append(weighted_loss)
                 
-                # Find optimal constant M
-                empirical_losses = np.array(empirical_losses)
-                empirical_rate = np.mean(empirical_losses)
+                # Store data for universal constant search
+                all_empirical_data.extend(empirical_losses)
+                all_theoretical_rates.extend([theoretical_rate] * len(empirical_losses))
+                beta_n_combinations.extend([(beta, n)] * len(empirical_losses))
                 
-                # M should be chosen so that most empirical losses are ≤ M * theoretical_rate
-                # Try different multiples of the theoretical rate (independent of empirical rate)
-                M_candidates = np.linspace(0.1, 50.0, 200)
-                
-                best_M = None
-                best_concentration_prob = 1.0
-                target_prob = n ** (-1.0)  # Try B = 1 first
-                
-                # Find the smallest M that works (most stringent test)
-                for M_candidate in M_candidates:
-                    threshold = M_candidate * theoretical_rate
-                    concentration_prob = np.mean(empirical_losses >= threshold)
-                    
-                    # We want concentration_prob ≤ n^{-B} for some reasonable B
-                    if concentration_prob <= target_prob:
-                        best_M = M_candidate
-                        best_concentration_prob = concentration_prob
-                        break  # Take the first (smallest) M that works
-                
-                if best_M is None:
-                    # If no M works with B=1, find the M that gives the best concentration
-                    # Use the 95th percentile as a reasonable threshold
-                    threshold = np.percentile(empirical_losses, 95)  # 95th percentile
-                    best_M = threshold / theoretical_rate
-                    best_concentration_prob = 0.05
-                
-                # Check if theorem holds
-                required_prob = n ** (-1.0)  # B = 1
-                theorem_holds = best_concentration_prob <= required_prob
-                
-                beta_results['empirical_rates'].append(empirical_rate)
-                beta_results['theoretical_rates'].append(theoretical_rate)
-                beta_results['optimal_M'].append(best_M)
-                beta_results['concentration_probabilities'].append(best_concentration_prob)
-                beta_results['theorem_holds'].append(theorem_holds)
-                
-                print(f"    Theoretical rate: {theoretical_rate:.4f}")
-                print(f"    Empirical rate: {empirical_rate:.4f}")
-                print(f"    Optimal M: {best_M:.3f}")
-                print(f"    Concentration prob: {best_concentration_prob:.4f}")
-                print(f"    Required prob (n^{-1}): {required_prob:.4f}")
-                print(f"    Theorem holds: {theorem_holds}")
+                print(f"    Collected {len(empirical_losses)} samples")
+        
+        print(f"\nPhase 2: Finding universal constants M, B")
+        print("-" * 40)
+        print(f"Total empirical samples: {len(all_empirical_data)}")
+        print(f"Testing {len(beta_values)} β values × {len(sample_sizes)} sample sizes = {len(beta_values) * len(sample_sizes)} combinations")
+        
+        # Convert to numpy arrays for easier manipulation
+        all_empirical_data = np.array(all_empirical_data)
+        all_theoretical_rates = np.array(all_theoretical_rates)
+        
+        # Find universal constants
+        universal_constants = self._find_universal_constants(
+            all_empirical_data, all_theoretical_rates, beta_n_combinations, sample_sizes
+        )
+        
+        M_universal = universal_constants['M']
+        B_universal = universal_constants['B']
+        
+        if M_universal is None or B_universal is None:
+            print(f"\nPhase 3: No universal constants found")
+            print("-" * 40)
+            print("THEOREM 3.1 FAILED: No universal constants M, B exist")
+            if 'best_partial_M' in universal_constants['search_details']:
+                print(f"Best partial constants found:")
+                print(f"  M = {universal_constants['search_details']['best_partial_M']:.3f}")
+                print(f"  B = {universal_constants['search_details']['best_partial_B']:.3f}")
+                print(f"  Success rate = {universal_constants['search_details']['best_partial_success_rate']:.1%}")
             
-            results['holder_ball_results'][beta] = beta_results
-            
-            # Overall assessment for this β
-            all_hold = all(beta_results['theorem_holds'])
-            mean_M = np.mean(beta_results['optimal_M'])
-            
-            results['optimal_constants'][beta] = {
-                'mean_M': mean_M,
-                'all_sample_sizes_pass': all_hold,
-                'success_rate': np.mean(beta_results['theorem_holds'])
+            # Return failure results
+            results = {
+                'sample_sizes': sample_sizes,
+                'beta_values': beta_values,
+                'L': L,
+                'universal_constants': universal_constants,
+                'validation_results': {'all_combinations_pass': False, 'overall_success_rate': 0.0},
+                'theorem_satisfied': False,
+                'overall_success_rate': 0.0
             }
             
-            print(f"  β = {beta} Summary:")
-            print(f"    Mean optimal M: {mean_M:.3f}")
-            print(f"    Success rate: {np.mean(beta_results['theorem_holds']):.1%}")
+            # Generate failure report
+            self._generate_failure_report(results, save_path)
+            return results
         
-        # Generate plots
-        self._plot_holder_ball_theorem_results(results, save_path)
+        print(f"\nPhase 3: Validating universal constants")
+        print("-" * 40)
+        print(f"Universal M = {M_universal:.3f}")
+        print(f"Universal B = {B_universal:.3f}")
         
-        # Generate summary report
-        self._generate_holder_ball_theorem_report(results, save_path)
+        # Validate these constants across all (β, n) combinations
+        validation_results = self._validate_universal_constants(
+            M_universal, B_universal, beta_values, sample_sizes, L, num_trials
+        )
+        
+        # Combine results
+        results = {
+            'sample_sizes': sample_sizes,
+            'beta_values': beta_values,
+            'L': L,
+            'universal_constants': {
+                'M': M_universal,
+                'B': B_universal,
+                'search_details': universal_constants
+            },
+            'validation_results': validation_results,
+            'theorem_satisfied': validation_results['all_combinations_pass'],
+            'overall_success_rate': validation_results['overall_success_rate']
+        }
+        
+        # Generate plots and reports
+        self._plot_universal_constants_results(results, save_path)
+        self._generate_universal_constants_report(results, save_path)
         
         return results
     
+    def _find_universal_constants(self, empirical_data: np.ndarray, theoretical_rates: np.ndarray, 
+                                 beta_n_combinations: List[Tuple[float, int]], 
+                                 sample_sizes: List[int]) -> Dict:
+        """Find universal constants M, B that work for all (β, n) combinations."""
+        
+        # Strategy: Find the smallest M and largest B that work for all combinations
+        M_candidates = np.linspace(0.1, 50.0, 500)  # Finer grid for universal search
+        B_candidates = np.linspace(1.0, 10.0, 100)
+        
+        print("Searching for universal constants...")
+                
+        best_M = None
+        best_B = None
+        best_success_rate = 0.0
+        
+        # For each (M, B) candidate pair
+        for M in M_candidates:
+            for B in B_candidates:
+                # Check if this (M, B) works for ALL combinations
+                combination_success = {}
+                
+                # Group data by (β, n) combination
+                for beta, n in set(beta_n_combinations):
+                    # Get empirical data for this specific (β, n) combination
+                    mask = [(b, s) == (beta, n) for b, s in beta_n_combinations]
+                    combo_empirical = empirical_data[mask]
+                    combo_theoretical = theoretical_rates[mask]
+                    
+                    # Check concentration inequality for this combination
+                    thresholds = M * combo_theoretical
+                    concentration_prob = np.mean(combo_empirical >= thresholds)
+                    required_prob = n ** (-B)
+                    
+                    combination_success[(beta, n)] = concentration_prob <= required_prob
+                
+                # Check if this (M, B) works for ALL combinations
+                all_combinations_pass = all(combination_success.values())
+                success_rate = np.mean(list(combination_success.values()))
+                
+                if all_combinations_pass and (best_M is None or M < best_M):
+                    # Found a better M (smaller is better when all combinations pass)
+                    best_M = M
+                    best_B = B
+                    best_success_rate = success_rate
+                    break  # Move to next M since we found working B
+                elif success_rate > best_success_rate:
+                    # Track best partial success
+                    best_M = M
+                    best_B = B
+                    best_success_rate = success_rate
+            
+            if best_M is not None and best_success_rate == 1.0:
+                print(f"  Found universal constants: M = {best_M:.3f}, B = {best_B:.3f}")
+                break
+        
+        if best_M is None or best_success_rate < 1.0:
+            # No perfect universal constants found
+            print("  No universal constants found that work for all combinations")
+            return {
+                'M': None,
+                'B': None,
+                'success_rate': best_success_rate if best_M is not None else 0.0,
+                'search_details': {
+                    'M_candidates_tested': len(M_candidates),
+                    'B_candidates_tested': len(B_candidates),
+                    'total_combinations': len(set(beta_n_combinations)),
+                    'best_partial_M': best_M,
+                    'best_partial_B': best_B,
+                    'best_partial_success_rate': best_success_rate if best_M is not None else 0.0
+                }
+            }
+        
+        return {
+            'M': best_M,
+            'B': best_B,
+            'success_rate': best_success_rate,
+            'search_details': {
+                'M_candidates_tested': len(M_candidates),
+                'B_candidates_tested': len(B_candidates),
+                'total_combinations': len(set(beta_n_combinations))
+            }
+        }
+    
+    def _validate_universal_constants(self, M: float, B: float, beta_values: List[float], 
+                                    sample_sizes: List[int], L: float, num_trials: int) -> Dict:
+        """Validate universal constants across all (β, n) combinations."""
+        
+        validation_results = {
+            'combination_results': {},
+            'all_combinations_pass': True,
+            'overall_success_rate': 0.0,
+            'detailed_stats': {}
+        }
+        
+        total_combinations = 0
+        successful_combinations = 0
+        
+        for beta in beta_values:
+            print(f"\nValidating β = {beta}")
+            holder_generator = HolderBallGenerator(self.max_resolution, beta, L)
+            
+            for n in sample_sizes:
+                total_combinations += 1
+                theoretical_rate = (n / np.log(n)) ** (-beta / (2 * beta + 1))
+                threshold = M * theoretical_rate
+                required_prob = n ** (-B)
+                
+                # Collect fresh empirical data for validation
+                empirical_losses = []
+                for trial in range(num_trials):
+                    true_params_holder = holder_generator.generate_holder_parameters(
+                        self.seq_len, mode='boundary'
+                    )
+                    
+                    noise_std = 1.0 / np.sqrt(n)
+                    noise = torch.randn_like(true_params_holder) * noise_std
+                    noisy_obs = true_params_holder + noise
+                    
+                    with torch.no_grad():
+                        x_tensor = noisy_obs.unsqueeze(0).to(self.device)
+                        pred_params = self.model(x_tensor).cpu()
+                    
+                    weighted_loss = self.weighted_loss.compute_loss(pred_params[0], true_params_holder)
+                    empirical_losses.append(weighted_loss)
+                
+                # Check concentration inequality
+                concentration_prob = np.mean(np.array(empirical_losses) >= threshold)
+                combination_passes = concentration_prob <= required_prob
+                
+                if combination_passes:
+                    successful_combinations += 1
+                else:
+                    validation_results['all_combinations_pass'] = False
+                
+                # Store detailed results
+                validation_results['combination_results'][(beta, n)] = {
+                    'theoretical_rate': theoretical_rate,
+                    'threshold': threshold,
+                    'concentration_prob': concentration_prob,
+                    'required_prob': required_prob,
+                    'passes': combination_passes,
+                    'empirical_mean': np.mean(empirical_losses),
+                    'empirical_std': np.std(empirical_losses)
+                }
+                
+                status = "✓" if combination_passes else "✗"
+                print(f"  n={n:3d}: {status} P[loss≥{threshold:.3f}]={concentration_prob:.4f} ≤ {required_prob:.4f}")
+        
+        validation_results['overall_success_rate'] = successful_combinations / total_combinations
+        
+        print(f"\nValidation Summary:")
+        print(f"  Successful combinations: {successful_combinations}/{total_combinations}")
+        print(f"  Success rate: {validation_results['overall_success_rate']:.1%}")
+        print(f"  Universal constants valid: {validation_results['all_combinations_pass']}")
+        
+        return validation_results
+    
 
     
-    def _plot_holder_ball_theorem_results(self, results: Dict, save_path: str = None):
-        """Plot results of Theorem 3.1 analysis over Hölder balls."""
+    def _plot_universal_constants_results(self, results: Dict, save_path: str = None):
+        """Plot results of universal constants analysis."""
         fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-        fig.suptitle('Theorem 3.1 Analysis: Hölder Balls + Weighted L∞ Loss', fontsize=16)
+        fig.suptitle('Theorem 3.1 Analysis: Universal Constants M, B', fontsize=16)
         
         sample_sizes = results['sample_sizes']
         beta_values = results['beta_values']
+        M_universal = results['universal_constants']['M']
+        B_universal = results['universal_constants']['B']
         
-        # Plot 1: Optimal M constants
+        # Plot 1: Universal constants display
         ax1 = axes[0, 0]
-        for beta in beta_values:
-            M_values = results['holder_ball_results'][beta]['optimal_M']
-            ax1.plot(sample_sizes, M_values, 'o-', label=f'β={beta}')
-        ax1.set_xlabel('Sample Size n')
-        ax1.set_ylabel('Optimal Constant M')
-        ax1.set_title('Optimal Constants M vs Sample Size')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
+        if M_universal is not None and B_universal is not None:
+            ax1.text(0.1, 0.7, f'Universal Constants:', fontsize=14, fontweight='bold', transform=ax1.transAxes)
+            ax1.text(0.1, 0.5, f'M = {M_universal:.3f}', fontsize=12, transform=ax1.transAxes)
+            ax1.text(0.1, 0.3, f'B = {B_universal:.3f}', fontsize=12, transform=ax1.transAxes)
+            ax1.text(0.1, 0.1, f'Success Rate = {results["overall_success_rate"]:.1%}', fontsize=12, transform=ax1.transAxes)
+            ax1.set_title('Universal Constants Found')
+        else:
+            ax1.text(0.1, 0.7, f'NO UNIVERSAL CONSTANTS', fontsize=14, fontweight='bold', color='red', transform=ax1.transAxes)
+            ax1.text(0.1, 0.5, f'Theorem 3.1 FAILED', fontsize=12, color='red', transform=ax1.transAxes)
+            search_details = results['universal_constants']['search_details']
+            if 'best_partial_M' in search_details and search_details['best_partial_M'] is not None:
+                ax1.text(0.1, 0.3, f'Best partial M = {search_details["best_partial_M"]:.3f}', fontsize=10, transform=ax1.transAxes)
+                ax1.text(0.1, 0.2, f'Best partial B = {search_details["best_partial_B"]:.3f}', fontsize=10, transform=ax1.transAxes)
+                ax1.text(0.1, 0.1, f'Partial success = {search_details["best_partial_success_rate"]:.1%}', fontsize=10, transform=ax1.transAxes)
+            ax1.set_title('No Universal Constants Found')
+        ax1.set_xlim(0, 1)
+        ax1.set_ylim(0, 1)
+        ax1.axis('off')
         
-        # Plot 2: Concentration probabilities
+        # Plot 2: Success rate by β
         ax2 = axes[0, 1]
-        for beta in beta_values:
-            conc_probs = results['holder_ball_results'][beta]['concentration_probabilities']
-            ax2.semilogy(sample_sizes, conc_probs, 'o-', label=f'β={beta}')
+        if 'combination_results' in results['validation_results'] and results['validation_results']['combination_results']:
+            beta_success_rates = []
+            for beta in beta_values:
+                beta_combinations = [(b, n) for b, n in results['validation_results']['combination_results'].keys() if b == beta]
+                beta_successes = [results['validation_results']['combination_results'][(b, n)]['passes'] for b, n in beta_combinations]
+                beta_success_rates.append(np.mean(beta_successes))
+            
+            bars = ax2.bar(range(len(beta_values)), beta_success_rates, alpha=0.7, 
+                          color=['green' if rate == 1.0 else 'orange' if rate > 0.5 else 'red' for rate in beta_success_rates])
+            
+            # Add percentage labels
+            for i, (bar, rate) in enumerate(zip(bars, beta_success_rates)):
+                ax2.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.02,
+                        f'{rate:.0%}', ha='center', va='bottom')
+        else:
+            # No validation results - all bars at 0%
+            bars = ax2.bar(range(len(beta_values)), [0] * len(beta_values), alpha=0.7, color='red')
+            ax2.text(0.5, 0.5, 'No validation performed', ha='center', va='center', transform=ax2.transAxes,
+                    fontsize=12, color='red')
         
-        # Add n^{-1} reference line
-        reference_probs = [n**(-1.0) for n in sample_sizes]
-        ax2.semilogy(sample_sizes, reference_probs, 'k--', label='n^{-1} (target)')
-        
-        ax2.set_xlabel('Sample Size n')
-        ax2.set_ylabel('Concentration Probability')
-        ax2.set_title('P[ℓ∞(θ,θ_0) ≥ M·rate] vs Sample Size')
-        ax2.legend()
+        ax2.set_xlabel('Smoothness Parameter β')
+        ax2.set_ylabel('Success Rate')
+        ax2.set_title('Success Rate by β Value')
+        ax2.set_xticks(range(len(beta_values)))
+        ax2.set_xticklabels([f'{beta}' for beta in beta_values])
+        ax2.set_ylim(0, 1.1)
         ax2.grid(True, alpha=0.3)
         
-        # Plot 3: Theorem success rate
+        # Plot 3: Success rate by sample size
         ax3 = axes[1, 0]
-        success_rates = [results['optimal_constants'][beta]['success_rate'] for beta in beta_values]
-        bars = ax3.bar(range(len(beta_values)), success_rates, alpha=0.7)
-        ax3.set_xlabel('Smoothness Parameter β')
+        if 'combination_results' in results['validation_results'] and results['validation_results']['combination_results']:
+            n_success_rates = []
+            for n in sample_sizes:
+                n_combinations = [(b, s) for b, s in results['validation_results']['combination_results'].keys() if s == n]
+                n_successes = [results['validation_results']['combination_results'][(b, s)]['passes'] for b, s in n_combinations]
+                n_success_rates.append(np.mean(n_successes))
+            
+            bars = ax3.bar(range(len(sample_sizes)), n_success_rates, alpha=0.7,
+                          color=['green' if rate == 1.0 else 'orange' if rate > 0.5 else 'red' for rate in n_success_rates])
+            
+            # Add percentage labels
+            for i, (bar, rate) in enumerate(zip(bars, n_success_rates)):
+                ax3.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.02,
+                        f'{rate:.0%}', ha='center', va='bottom')
+        else:
+            # No validation results - all bars at 0%
+            bars = ax3.bar(range(len(sample_sizes)), [0] * len(sample_sizes), alpha=0.7, color='red')
+            ax3.text(0.5, 0.5, 'No validation performed', ha='center', va='center', transform=ax3.transAxes,
+                    fontsize=12, color='red')
+        
+        ax3.set_xlabel('Sample Size n')
         ax3.set_ylabel('Success Rate')
-        ax3.set_title('Theorem 3.1 Success Rate by β')
-        ax3.set_xticks(range(len(beta_values)))
-        ax3.set_xticklabels([f'{beta}' for beta in beta_values])
+        ax3.set_title('Success Rate by Sample Size')
+        ax3.set_xticks(range(len(sample_sizes)))
+        ax3.set_xticklabels([f'{n}' for n in sample_sizes])
+        ax3.set_ylim(0, 1.1)
         ax3.grid(True, alpha=0.3)
         
-        # Add percentage labels on bars
-        for i, bar in enumerate(bars):
-            height = bar.get_height()
-            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                    f'{height:.1%}', ha='center', va='bottom')
-        
-        # Plot 4: Rate comparison
+        # Plot 4: Concentration probabilities heatmap
         ax4 = axes[1, 1]
-        for beta in beta_values:
-            empirical_rates = results['holder_ball_results'][beta]['empirical_rates']
-            theoretical_rates = results['holder_ball_results'][beta]['theoretical_rates']
-            optimal_M = results['holder_ball_results'][beta]['optimal_M']
+        if 'combination_results' in results['validation_results'] and results['validation_results']['combination_results']:
+            conc_probs = np.zeros((len(beta_values), len(sample_sizes)))
             
-            # Adjusted theoretical rates with optimal M
-            adjusted_rates = [M * rate for M, rate in zip(optimal_M, theoretical_rates)]
+            for i, beta in enumerate(beta_values):
+                for j, n in enumerate(sample_sizes):
+                    if (beta, n) in results['validation_results']['combination_results']:
+                        conc_probs[i, j] = results['validation_results']['combination_results'][(beta, n)]['concentration_prob']
             
-            ax4.loglog(sample_sizes, empirical_rates, 'o-', label=f'Empirical β={beta}')
-            ax4.loglog(sample_sizes, adjusted_rates, '--', alpha=0.7, label=f'M·Theory β={beta}')
+            im = ax4.imshow(conc_probs, cmap='RdYlGn_r', aspect='auto')
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax4)
+            cbar.set_label('Concentration Probability')
+            
+            # Add text annotations
+            for i in range(len(beta_values)):
+                for j in range(len(sample_sizes)):
+                    text = ax4.text(j, i, f'{conc_probs[i, j]:.3f}', ha="center", va="center", color="black", fontsize=8)
+        else:
+            # No validation results - show empty heatmap
+            ax4.text(0.5, 0.5, 'No validation performed\n(No universal constants found)', 
+                    ha='center', va='center', transform=ax4.transAxes, fontsize=12, color='red')
         
         ax4.set_xlabel('Sample Size n')
-        ax4.set_ylabel('Rate')
-        ax4.set_title('Empirical vs M·Theoretical Rates')
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
+        ax4.set_ylabel('Smoothness Parameter β')
+        ax4.set_title('Concentration Probabilities\nP[loss ≥ M·rate]')
+        ax4.set_xticks(range(len(sample_sizes)))
+        ax4.set_xticklabels([f'{n}' for n in sample_sizes])
+        ax4.set_yticks(range(len(beta_values)))
+        ax4.set_yticklabels([f'{beta}' for beta in beta_values])
         
         plt.tight_layout()
         
@@ -533,69 +951,154 @@ class TheoreticalAnalyzer:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
             print(f"Plot saved to: {save_path}")
         else:
-            plt.savefig('theorem_3_1_holder_ball_analysis.png', dpi=150, bbox_inches='tight')
-            print("Plot saved to: theorem_3_1_holder_ball_analysis.png")
+            plt.savefig('theorem_3_1_universal_constants.png', dpi=150, bbox_inches='tight')
+            print("Plot saved to: theorem_3_1_universal_constants.png")
         
-        plt.close()  # Close the figure to free memory
+        plt.close()
     
-    def _generate_holder_ball_theorem_report(self, results: Dict, save_path: str = None):
-        """Generate text report of Theorem 3.1 analysis over Hölder balls."""
-        report_path = save_path.replace('.png', '_report.txt') if save_path else 'theorem_3_1_holder_ball_report.txt'
+    def _generate_universal_constants_report(self, results: Dict, save_path: str = None):
+        """Generate text report of universal constants analysis."""
+        report_path = save_path.replace('.png', '_report.txt') if save_path else 'theorem_3_1_universal_constants_report.txt'
         
         with open(report_path, 'w', encoding='utf-8') as f:
-            f.write("THEOREM 3.1 ANALYSIS REPORT\n")
+            f.write("THEOREM 3.1 UNIVERSAL CONSTANTS ANALYSIS\n")
             f.write("=" * 50 + "\n\n")
             
             f.write("METHODOLOGY:\n")
             f.write("-" * 20 + "\n")
-            f.write("• Testing over Hölder balls H(β,L) as specified in theorem\n")
-            f.write("• Using weighted L∞ loss: ℓ∞(θ,θ') = Σⱼ 2^(j/2) max_k |θⱼₖ - θ'ⱼₖ|\n")
-            f.write("• Finding optimal constants M, B such that theorem holds\n")
-            f.write("• Theorem: ∃ M,B > 0 s.t. P[ℓ∞(θ,θ_0) ≥ M·rate] ≤ n^(-B)\n\n")
+            f.write("• Finding SINGLE pair (M,B) that works for ALL β values simultaneously\n")
+            f.write("• Testing over Hölder balls H(β,L) with weighted L∞ loss\n")
+            f.write("• Theorem: ∃ M,B > 0 s.t. P[ℓ∞(θ,θ₀) ≥ M·rate] ≤ n^(-B) uniformly in β\n")
+            f.write("• M and B are UNIVERSAL constants, not β-dependent\n\n")
             
-            f.write("SUMMARY BY SMOOTHNESS PARAMETER:\n")
-            f.write("-" * 35 + "\n")
+            universal_constants = results['universal_constants']
+            if universal_constants['M'] is not None and universal_constants['B'] is not None:
+                f.write("UNIVERSAL CONSTANTS FOUND:\n")
+                f.write("-" * 30 + "\n")
+                f.write(f"M = {universal_constants['M']:.3f}\n")
+                f.write(f"B = {universal_constants['B']:.3f}\n")
+                f.write(f"Search Success Rate = {universal_constants['search_details']['success_rate']:.1%}\n\n")
+            else:
+                f.write("NO UNIVERSAL CONSTANTS FOUND:\n")
+                f.write("-" * 30 + "\n")
+                f.write("M = None\n")
+                f.write("B = None\n")
+                f.write("Search failed to find constants that work for all combinations\n\n")
             
-            for beta in results['beta_values']:
-                constants = results['optimal_constants'][beta]
-                f.write(f"\nβ = {beta}:\n")
-                f.write(f"  Mean optimal M: {constants['mean_M']:.3f}\n")
-                f.write(f"  Success rate: {constants['success_rate']:.1%}\n")
-                f.write(f"  All sample sizes pass: {constants['all_sample_sizes_pass']}\n")
-            
-            f.write(f"\nDETAILED RESULTS:\n")
+            f.write("VALIDATION RESULTS:\n")
             f.write("-" * 20 + "\n")
+            validation = results['validation_results']
+            f.write(f"Overall Success Rate: {validation['overall_success_rate']:.1%}\n")
+            f.write(f"All Combinations Pass: {validation['all_combinations_pass']}\n\n")
             
-            for beta in results['beta_values']:
-                f.write(f"\nβ = {beta}:\n")
-                beta_results = results['holder_ball_results'][beta]
+            if 'combination_results' in validation and validation['combination_results']:
+                f.write("DETAILED RESULTS BY (β, n) COMBINATION:\n")
+                f.write("-" * 40 + "\n")
+                f.write("β    n    Theoretical Rate   Threshold   Concentration Prob   Required Prob   Pass\n")
+                f.write("-" * 80 + "\n")
                 
-                for i, n in enumerate(results['sample_sizes']):
-                    f.write(f"  n={n:3d}: ")
-                    f.write(f"M={beta_results['optimal_M'][i]:.3f}, ")
-                    f.write(f"P={beta_results['concentration_probabilities'][i]:.4f}, ")
-                    f.write(f"Pass={beta_results['theorem_holds'][i]}\n")
+                for (beta, n), result in validation['combination_results'].items():
+                    f.write(f"{beta:.1f}  {n:3d}    {result['theoretical_rate']:.6f}      {result['threshold']:.6f}      {result['concentration_prob']:.6f}        {result['required_prob']:.6f}     {result['passes']}\n")
+            else:
+                f.write("No validation performed (no universal constants found)\n")
+            
+            if 'combination_results' in validation and validation['combination_results']:
+                f.write(f"\nSUMMARY BY β VALUE:\n")
+                f.write("-" * 20 + "\n")
+                
+                for beta in results['beta_values']:
+                    beta_combinations = [(b, n) for b, n in validation['combination_results'].keys() if b == beta]
+                    beta_successes = [validation['combination_results'][(b, n)]['passes'] for b, n in beta_combinations]
+                    beta_success_rate = np.mean(beta_successes)
+                    f.write(f"β = {beta}: {len(beta_successes)} combinations, {beta_success_rate:.1%} success rate\n")
+                
+                f.write(f"\nSUMMARY BY SAMPLE SIZE:\n")
+                f.write("-" * 25 + "\n")
+                
+                for n in results['sample_sizes']:
+                    n_combinations = [(b, s) for b, s in validation['combination_results'].keys() if s == n]
+                    n_successes = [validation['combination_results'][(b, s)]['passes'] for b, s in n_combinations]
+                    n_success_rate = np.mean(n_successes)
+                    f.write(f"n = {n}: {len(n_successes)} combinations, {n_success_rate:.1%} success rate\n")
             
             f.write(f"\nOVERALL ASSESSMENT:\n")
             f.write("-" * 20 + "\n")
             
-            all_betas_pass = all(results['optimal_constants'][beta]['all_sample_sizes_pass'] 
-                               for beta in results['beta_values'])
-            overall_success_rate = np.mean([results['optimal_constants'][beta]['success_rate'] 
-                                          for beta in results['beta_values']])
-            
-            f.write(f"All β values pass: {all_betas_pass}\n")
-            f.write(f"Overall success rate: {overall_success_rate:.1%}\n")
-            
-            if all_betas_pass:
-                f.write("\n✓ THEOREM 3.1 IS SATISFIED\n")
-                f.write("The transformer achieves the theoretical guarantees when properly tested.\n")
+            if validation['all_combinations_pass']:
+                f.write("✓ THEOREM 3.1 IS SATISFIED\n")
+                f.write("Universal constants M, B exist that work for all tested β values.\n")
+                f.write("The spike-slab transformer achieves uniform posterior contraction.\n")
             else:
-                f.write("\n✗ THEOREM 3.1 IS NOT FULLY SATISFIED\n")
-                f.write("Some configurations do not meet the theoretical requirements.\n")
+                f.write("✗ THEOREM 3.1 IS NOT FULLY SATISFIED\n")
+                f.write("No universal constants found that work for all (β, n) combinations.\n")
+                f.write(f"Best achievable success rate: {validation['overall_success_rate']:.1%}\n")
+                
+                # Identify problematic combinations
+                failed_combinations = [(beta, n) for (beta, n), result in validation['combination_results'].items() 
+                                     if not result['passes']]
+                if failed_combinations:
+                    f.write(f"\nFailed combinations: {failed_combinations}\n")
         
         print(f"Report saved to: {report_path}")
     
+    def _generate_failure_report(self, results: Dict, save_path: str = None):
+        """Generate failure report when no universal constants are found."""
+        report_path = save_path.replace('.png', '_failure_report.txt') if save_path else 'theorem_3_1_failure_report.txt'
+        
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write("THEOREM 3.1 FAILURE REPORT\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write("RESULT: THEOREM 3.1 IS NOT SATISFIED\n")
+            f.write("-" * 40 + "\n")
+            f.write("No universal constants M, B exist that work for all tested β values.\n\n")
+            
+            f.write("METHODOLOGY:\n")
+            f.write("-" * 20 + "\n")
+            f.write("• Searched for SINGLE pair (M,B) that works for ALL β values simultaneously\n")
+            f.write("• Testing over Hölder balls H(β,L) with weighted L∞ loss\n")
+            f.write("• Theorem: ∃ M,B > 0 s.t. P[ℓ∞(θ,θ₀) ≥ M·rate] ≤ n^(-B) uniformly in β\n")
+            f.write("• M and B must be UNIVERSAL constants, not β-dependent\n\n")
+            
+            f.write("SEARCH DETAILS:\n")
+            f.write("-" * 20 + "\n")
+            search_details = results['universal_constants']['search_details']
+            f.write(f"M candidates tested: {search_details['M_candidates_tested']}\n")
+            f.write(f"B candidates tested: {search_details['B_candidates_tested']}\n")
+            f.write(f"Total (β,n) combinations: {search_details['total_combinations']}\n\n")
+            
+            if 'best_partial_M' in search_details and search_details['best_partial_M'] is not None:
+                f.write("BEST PARTIAL CONSTANTS FOUND:\n")
+                f.write("-" * 30 + "\n")
+                f.write(f"M = {search_details['best_partial_M']:.3f}\n")
+                f.write(f"B = {search_details['best_partial_B']:.3f}\n")
+                f.write(f"Success rate = {search_details['best_partial_success_rate']:.1%}\n")
+                f.write("(These constants work for some but not all combinations)\n\n")
+            
+            f.write("IMPLICATIONS:\n")
+            f.write("-" * 15 + "\n")
+            f.write("• The spike-slab transformer does NOT achieve uniform posterior contraction\n")
+            f.write("• Different β values require different constants M, B\n")
+            f.write("• The theorem's uniformity requirement is violated\n")
+            f.write("• Consider:\n")
+            f.write("  - Adjusting model architecture or training\n")
+            f.write("  - Testing weaker versions of the theorem\n")
+            f.write("  - Examining β-dependent constants separately\n")
+        
+        print(f"Failure report saved to: {report_path}")
+
+    def _plot_holder_ball_theorem_results(self, results: Dict, save_path: str = None):
+        """Plot results of Theorem 3.1 analysis over Hölder balls."""
+        # Keep the original method for backwards compatibility
+        # This will be called if the old method is still used somewhere
+        pass
+
+    def _generate_holder_ball_theorem_report(self, results: Dict, save_path: str = None):
+        """Generate text report of Theorem 3.1 analysis over Hölder balls."""
+        # Keep the original method for backwards compatibility  
+        # This will be called if the old method is still used somewhere
+        pass
+
 
 if __name__ == "__main__":
     model_path = "checkpoints/naive_wavelet_transformer.pkl"

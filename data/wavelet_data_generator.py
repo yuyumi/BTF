@@ -39,8 +39,8 @@ class WaveletSpikeSlabPrior(Prior):
     
     def __init__(self, 
                  n: int = 256,
-                 K: float = 1.0,
-                 tau: float = 1.0,
+                 K: float = None,
+                 tau: float = None,
                  max_resolution: int = 6,
                  sequence_length: Optional[int] = None,
                  weight_selector: Optional[WeightSelector] = None,
@@ -68,11 +68,12 @@ class WaveletSpikeSlabPrior(Prior):
         self.slab_distribution = slab_distribution or NormalSlab(std=1.0)
         
         # Create spike-slab prior and wavelet basis
+        # Pass None for K and tau to use global config defaults
         self.spike_slab_prior = SpikeSlabPrior(
             n=n, 
-            K=K, 
-            tau=tau, 
-            L0=1.0,
+            K=K,  # Will be None unless explicitly provided
+            tau=tau,  # Will be None unless explicitly provided
+            L0=None,  # Use global config default
             max_resolution=max_resolution,
             weight_selector=self.weight_selector,
             slab_distribution=self.slab_distribution
@@ -259,8 +260,8 @@ class WaveletSpikeSlabPrior(Prior):
         """Get information about the data generation setup."""
         return {
             'n': self.n,
-            'K': self.K,
-            'tau': self.tau,
+            'K': self.spike_slab_prior.K,  # Get actual value from spike_slab_prior
+            'tau': self.spike_slab_prior.tau,  # Get actual value from spike_slab_prior
             'max_resolution': self.max_resolution,
             'effective_max_level': self.effective_max_level,
             'J_n': self.spike_slab_prior.J_n,
@@ -330,6 +331,8 @@ def create_wavelet_prior(config_name: str, n: int = 256, **kwargs) -> WaveletSpi
     
     config = configs[config_name]
     config.update(kwargs)  # Allow overrides
+    
+    print(f"DEBUG: create_wavelet_prior config for '{config_name}': {config}")
     
     return WaveletSpikeSlabPrior(n=n, **config)
 

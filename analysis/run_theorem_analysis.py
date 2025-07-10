@@ -3,12 +3,17 @@
 Runner script for Theorem 3.1 theoretical analysis.
 
 This script tests Theorem 3.1 over Hölder balls using the proper weighted L∞ loss function.
+The analysis searches for universal constants M, B that work for ALL β values simultaneously,
+as required by the mathematical statement of Theorem 3.1.
+
+The script automatically uses pre-computed configurations when available for speed, and 
+generates them automatically if they don't exist. Falls back to exhaustive search as needed.
 
 Usage:
     python analysis/run_theorem_analysis.py
     python analysis/run_theorem_analysis.py checkpoints/my_model.pkl
     python analysis/run_theorem_analysis.py checkpoints/my_model.pkl my_output_dir/
-    python analysis/run_theorem_analysis.py --beta-values 1.0 2.0 3.0
+    python analysis/run_theorem_analysis.py --sample-sizes 32 64 128 --num-trials 50
 """
 
 import os
@@ -22,6 +27,7 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from analysis.theoretical_analysis import TheoreticalAnalyzer
+from analysis.generate_theorem_configurations import generate_configurations
 import numpy as np
 
 
@@ -73,6 +79,35 @@ def main():
     print(f"Sample sizes: {args.sample_sizes}")
     print(f"Trials per config: {args.num_trials}")
     
+    # Check for pre-computed configurations
+    config_file = "theorem_configurations.csv"
+    if os.path.exists(config_file):
+        print(f"✓ Found pre-computed configurations: {config_file}")
+        print("Will use these configurations when available, falling back to exhaustive search otherwise")
+    else:
+        print(f"No pre-computed configurations found ({config_file})")
+        print("Automatically generating configurations...")
+        print("-" * 40)
+        
+        try:
+            print("This may take a few minutes...")
+            # Generate configurations automatically
+            generated_configs = generate_configurations(num_configs=10, output_path=config_file)
+            
+            if generated_configs and len(generated_configs) > 0:
+                print(f"✓ Successfully generated {len(generated_configs)} configurations")
+                print(f"✓ Saved to {config_file} for future use")
+                print("Will use these configurations for analysis")
+            else:
+                print("❌ Failed to generate configurations")
+                print("Will fall back to exhaustive search for all configurations")
+                
+        except Exception as e:
+            print(f"❌ Error generating configurations: {e}")
+            print("Will fall back to exhaustive search for all configurations")
+        
+        print("-" * 40)
+    
     # Create output directory
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
@@ -97,6 +132,7 @@ def main():
         
         print(f"\n{'='*60}")
         print("RUNNING THEOREM 3.1 ANALYSIS")
+        print("Finding universal constants M, B that work for ALL β values simultaneously")
         print("Testing over Hölder balls H(β,L) with β grids in intervals and L grid")
         print(f"{'='*60}")
         
@@ -129,6 +165,7 @@ def main():
                 # Create beta grid within the interval
                 beta_grid = np.linspace(beta1, beta2, 5)  # 5 points per interval
                 print(f"Beta grid: {beta_grid}")
+                print("Searching for universal constants M, B that work for ALL β values in this interval")
                 
                 # Test theorem over Hölder balls for each beta in the grid
                 save_path = f"{args.output_dir}/theorem_L{L_idx+1}_interval_{i+1}_analysis.png"
@@ -144,11 +181,12 @@ def main():
                 L_results[interval_name] = interval_results
                 
                 # Check if theorem holds uniformly over this interval
-                success_rates = [interval_results['optimal_constants'][beta]['success_rate'] 
-                               for beta in beta_grid]
-                uniform_success = all(rate > 0.8 for rate in success_rates)
+                # With universal constants, we check if the theorem is satisfied overall
+                theorem_satisfied = interval_results.get('theorem_satisfied', False)
+                overall_success_rate = interval_results.get('overall_success_rate', 0.0)
                 
-                print(f"Interval {interval_name}: {'✓ UNIFORM SUCCESS' if uniform_success else '✗ NON-UNIFORM'}")
+                print(f"Interval {interval_name}: {'✓ UNIVERSAL CONSTANTS FOUND' if theorem_satisfied else '✗ NO UNIVERSAL CONSTANTS'}")
+                print(f"  Overall success rate: {overall_success_rate:.1%}")
             
             all_results[f"L={L:.2f}"] = L_results
         
@@ -199,24 +237,22 @@ def main():
                 
                 print(f"\nInterval {i+1}: {interval_name}")
                 
-                # Get beta grid for this interval
-                beta_grid = np.linspace(beta1, beta2, 5)
+                # With universal constants approach, we have a single result per interval
+                theorem_satisfied = interval_data.get('theorem_satisfied', False)
+                overall_success_rate = interval_data.get('overall_success_rate', 0.0)
                 
-                interval_success_rates = []
-                for beta in beta_grid:
-                    success_rate = interval_data['optimal_constants'][beta]['success_rate']
-                    mean_M = interval_data['optimal_constants'][beta]['mean_M']
-                    print(f"  β = {beta:.2f}: Success rate = {success_rate:.1%}, Mean M = {mean_M:.3f}")
-                    interval_success_rates.append(success_rate)
+                # Display universal constants if found
+                if 'universal_constants' in interval_data and interval_data['universal_constants']['M'] is not None:
+                    M_universal = interval_data['universal_constants']['M']
+                    B_universal = interval_data['universal_constants']['B']
+                    print(f"  Universal constants: M = {M_universal:.3f}, B = {B_universal:.3f}")
+                else:
+                    print(f"  No universal constants found")
                 
-                # Check if uniform across interval
-                uniform_success = all(rate > 0.8 for rate in interval_success_rates)
-                avg_rate = np.mean(interval_success_rates)
+                print(f"  Overall success rate: {overall_success_rate:.1%}")
+                print(f"  Theorem satisfied: {'✓ YES' if theorem_satisfied else '✗ NO'}")
                 
-                print(f"  Interval average: {avg_rate:.1%}")
-                print(f"  Uniform success: {'✓ YES' if uniform_success else '✗ NO'}")
-                
-                if uniform_success:
+                if theorem_satisfied:
                     L_uniform_intervals += 1
                     overall_uniform_count += 1
             
@@ -230,13 +266,13 @@ def main():
         print(f"Success rate: {overall_uniform_count/total_configurations:.1%}")
         
         if overall_uniform_count == total_configurations:
-            print("✓ Theorem 3.1 holds uniformly across ALL tested (L, β-interval) configurations!")
+            print("✓ Theorem 3.1 holds with universal constants across ALL tested (L, β-interval) configurations!")
         elif overall_uniform_count > total_configurations * 0.5:
-            print("~ Theorem 3.1 holds uniformly in MAJORITY of configurations")
+            print("~ Theorem 3.1 holds with universal constants in MAJORITY of configurations")
         elif overall_uniform_count > 0:
-            print("~ Theorem 3.1 holds uniformly in SOME configurations")
+            print("~ Theorem 3.1 holds with universal constants in SOME configurations")
         else:
-            print("✗ Theorem 3.1 does not hold uniformly in ANY configuration")
+            print("✗ Theorem 3.1 does not hold with universal constants in ANY configuration")
         
         print(f"\nFor detailed analysis, check the report files in {args.output_dir}/")
         return 0

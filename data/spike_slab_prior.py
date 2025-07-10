@@ -4,6 +4,8 @@ import numpy as np
 from typing import Tuple, Dict, List, Optional, Callable, Protocol
 from abc import ABC, abstractmethod
 import math
+import json
+import os
 
 
 class WeightSelector(Protocol):
@@ -212,9 +214,9 @@ class SpikeSlabPrior:
     
     def __init__(self, 
                  n: int,
-                 K: float = 1.0,
-                 tau: float = 1.0,
-                 L0: float = 1.0,
+                 K: Optional[float] = None,
+                 tau: Optional[float] = None,
+                 L0: Optional[float] = None,
                  max_resolution: Optional[int] = None,
                  weight_selector: Optional[WeightSelector] = None,
                  slab_distribution: Optional[SlabDistribution] = None):
@@ -230,10 +232,39 @@ class SpikeSlabPrior:
             weight_selector: Strategy for computing mixture weights
             slab_distribution: Distribution for slab component g(x)
         """
+        # Load global config - fail loudly if not found
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.json')
+        
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load config from {config_path}: {e}")
+        
+        spike_slab_config = config.get('spike_slab_prior')
+        if spike_slab_config is None:
+            raise KeyError("'spike_slab_prior' section not found in config.json")
+        
+        # Use config values or provided parameters
+        try:
+            self.K = K if K is not None else spike_slab_config['K']
+            self.tau = tau if tau is not None else spike_slab_config['tau']
+            self.L0 = L0 if L0 is not None else spike_slab_config['L0']
+        except KeyError as e:
+            raise KeyError(f"Missing required key in spike_slab_prior config: {e}")
+        
+        # Ensure no None values - fail loudly if config is incomplete
+        if self.L0 is None:
+            raise ValueError("L0 parameter is None after loading config - check config.json")
+        if self.K is None:
+            raise ValueError("K parameter is None after loading config - check config.json")
+        if self.tau is None:
+            raise ValueError("tau parameter is None after loading config - check config.json")
+        
         self.n = n
-        self.K = K
-        self.tau = tau
-        self.L0 = L0
         
         # Resolution cutoff: J_n = [log n / log 2]
         self.J_n = int(math.log(n) / math.log(2)) if max_resolution is None else max_resolution
@@ -243,11 +274,11 @@ class SpikeSlabPrior:
         self.slab_distribution = slab_distribution or NormalSlab(std=1.0)
         
         # Precompute weights w_{j,n} for all resolution levels
-        self.weights = self.weight_selector.compute_weights(n, K, tau, self.J_n)
+        self.weights = self.weight_selector.compute_weights(n, self.K, self.tau, self.J_n)
         
         # Verify boundedness condition
-        if not self.slab_distribution.verify_boundedness(L0):
-            raise ValueError(f"Slab distribution does not satisfy boundedness condition for L0={L0}")
+        if not self.slab_distribution.verify_boundedness(self.L0):
+            raise ValueError(f"Slab distribution does not satisfy boundedness condition for L0={self.L0}")
     
     def get_weight(self, j: int) -> float:
         """Get mixture weight w_{j,n} for resolution level j."""

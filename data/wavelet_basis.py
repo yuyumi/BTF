@@ -35,7 +35,7 @@ class HaarWaveletBasis:
         
         # Levels 1 to max_resolution: wavelet functions
         for j in range(1, self.max_resolution + 1):
-            structure[j] = 2 ** (j - 1)
+            structure[j] = 2 ** j
             
         return structure
     
@@ -120,7 +120,7 @@ class HaarWaveletBasis:
                 coefficients[(0, 0)] = self.compute_coefficient(func, 0, 0)
             else:
                 # Wavelet coefficients
-                for k in range(2 ** (j - 1)):
+                for k in range(2 ** j):
                     coefficients[(j, k)] = self.compute_coefficient(func, j, k)
                     
         return coefficients
@@ -156,7 +156,7 @@ class HaarWaveletBasis:
             if j == 0:
                 structure[j] = 1  # One scaling coefficient
             else:
-                structure[j] = 2 ** (j - 1)  # 2^{j-1} wavelet coefficients
+                structure[j] = 2 ** j  # 2^j wavelet coefficients
                 
         return structure
     
